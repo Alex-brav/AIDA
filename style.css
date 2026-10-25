@@ -1,0 +1,14 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+canvas {
+  display: block;   /* removes the gap under the canvas */
+}
+
+::-webkit-scrollbar {
+  display: none;    /* never show scrollbars */
+}

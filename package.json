@@ -1,0 +1,14 @@
+{
+  "name": "aida",
+  "version": "0.1.0",
+  "description": "A.I.D.A. - AI Desktop Assistant",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "Andres Bravo Garza",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^45.0.0"
+  }
+}
