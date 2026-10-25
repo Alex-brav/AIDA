@@ -1,0 +1,84 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  font-family: 'Segoe UI', sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+}
+
+#panel {
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - 16px);
+  margin: 8px;
+  background: #22272bf8 ;
+  border: 2px solid #202224;
+  border-radius: 12px;
+  color: #ffffff;
+}
+
+#header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  font-weight: 600;
+  -webkit-app-region: drag;
+}
+
+#close {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color: #ffffff;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+#messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 10px;
+}
+
+.msg {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  max-width: 85%;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.msg.user { background: #575858; margin-left: auto; }
+.msg.aida { background: #262627; }
+
+#form {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+}
+
+#input {
+  flex: 1;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: #262627;
+  color: #ffffff;
+  outline: none;
+}
+
+#form button {
+  border: none;
+  border-radius: 8px;
+  padding: 6px 12px;
+  background: #575858;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.msg.thinking {
+  opacity: 0.6;
+  font-style: italic;
+}

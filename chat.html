@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'">
+  <title>A.I.D.A. chat</title>
+  <link rel="stylesheet" href="chat.css">
+</head>
+<body>
+  <div id="panel">
+    <div id="header">
+      <span>A.I.D.A.</span>
+      <button id="close" title="Close (Esc)">×</button>
+    </div>
+    <div id="messages"></div>
+    <form id="form">
+      <input id="input" placeholder="Say something to A.I.D.A..." autocomplete="off" autofocus>
+      <button type="submit">Send</button>
+    </form>
+  </div>
+  <script src="chat.js"></script>
+</body>
+</html>

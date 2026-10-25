@@ -10,5 +10,8 @@
   "license": "MIT",
   "devDependencies": {
     "electron": "^45.0.0"
+  },
+  "dependencies": {
+    "ollama": "^0.6.4"
   }
 }
