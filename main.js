@@ -18,12 +18,17 @@ const BRAKE_DISTANCE = 40;
 const BRAKE_EASE = 0.3;
 const BRAKE_MIN_SPEED = 1.5;
 
+// stepping up onto a monitor with a higher floor
+const LIFT_SPEED = 6;
+const MAX_LIFT = 400;
+
 let win;
 let direction = -1; 
 let walking = false;
 let dragging = false;
 let falling = false;
 let braking = false;
+let lifting = null;
 let dragTimer = null;
 let dragOffset = { x: 0, y: 0 };
 let dragSamples = [];
@@ -49,9 +54,65 @@ let ledgeId = null;
 let ledgeLeft = 0;
 let watcher = null;
 
-const area = () => screen.getPrimaryDisplay().workArea; 
-const groundY = () => area().y + area().height - SIZE;
 const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
+
+// the world A.I.D.A. lives in, which includes every monitor's usable area, plus the edges of the whole desktop
+let world = { displays: [], left: 0, right: 0, top: 0, bottom: 0 };
+
+function buildWorld() {
+  const displays = screen.getAllDisplays().map((d) => ({
+    id: d.id,
+    left: d.workArea.x,
+    right: d.workArea.x + d.workArea.width,
+    top: d.workArea.y,
+    floor: d.workArea.y + d.workArea.height,
+  }));
+  world = {
+    displays,
+    left: Math.min(...displays.map((d) => d.left)),
+    right: Math.max(...displays.map((d) => d.right)),
+    top: Math.min(...displays.map((d) => d.top)),
+    bottom: Math.max(...displays.map((d) => d.floor)),
+  };
+}
+
+function displayAt(x, y) {
+  return world.displays.find((d) => x >= d.left && x < d.right && y >= d.top && y <= d.floor) || null;
+}
+
+// the floor under this point
+// null means there's nothing under her at all (she's above a gap between monitors)
+function floorAt(x, y) {
+  let best = null;
+  for (const d of world.displays) {
+    if (x < d.left || x >= d.right) continue;
+    if (d.floor < y) continue;
+    if (best === null || d.floor < best) best = d.floor;
+  }
+  return best;
+}
+
+// the monitor whose floor is just above this point
+function displayAbove(x, y) {
+  let best = null;
+  for (const d of world.displays) {
+    if (x < d.left || x >= d.right) continue;
+    if (d.floor >= y) continue;
+    if (best === null || d.floor > best.floor) best = d;
+  }
+  return best;
+}
+
+// the floor under her. Past the outer edges of the desktop she uses the floor of the monitor at that edge,
+// so a throw off the side still lands somewhere she can walk back from.
+function groundLine(centerX, feet) {
+  return floorAt(clamp(centerX, world.left, world.right - 1), feet);
+}
+
+// the monitor she's on (or closest to), for things like placing the chat window
+function displayNear(x, y) {
+  return displayAt(x, y) || world.displays.find((d) => d.id === screen.getDisplayNearestPoint({ x: Math.round(x), y: Math.round(y) }).id) || world.displays[0];
+}
 
 
 function moveTo(x, y) {
@@ -59,16 +120,16 @@ function moveTo(x, y) {
 }
 
 function sendState() {
-  if (win) win.webContents.send('state', { walking, direction, dragging, falling, braking, thinking });
+  if (win) win.webContents.send('state', { walking, direction, dragging, falling, braking: braking || lifting !== null, thinking });
 }
 
 function createWindow() {
-  const a = area();
+  const a = screen.getPrimaryDisplay().workArea;
   win = new BrowserWindow({
     width: SIZE,
     height: SIZE,
     x: a.x + a.width - SIZE - 50,
-    y: groundY(),
+    y: a.y + a.height - SIZE,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -89,6 +150,18 @@ function createWindow() {
   setInterval(changeMood, 4000);
   startWindowWatcher();
   createChatWindow();
+}
+
+// print every display Windows knows about, to learn how they're arranged
+function logDisplays() {
+  const primaryId = screen.getPrimaryDisplay().id;
+  for (const d of screen.getAllDisplays()) {
+    const tag = d.id === primaryId ? ' (primary)' : '';
+    console.log(`display ${d.id}${tag}`);
+    console.log('  bounds:   ', d.bounds);
+    console.log('  workArea: ', d.workArea);
+    console.log('  scale:    ', d.scaleFactor);
+  }
 }
 
 function createChatWindow() {
@@ -118,9 +191,9 @@ function toggleChat() {
     return;
   }
   const [x, y] = win.getPosition();
-  const a = area();
-  const chatX = clamp(x + SIZE / 2 - CHAT_W / 2, a.x, a.x + a.width - CHAT_W);
-  const chatY = clamp(y + 110 - CHAT_H, a.y, a.y + a.height - CHAT_H);
+  const d = displayNear(x + SIZE / 2, y + SIZE - 1);
+  const chatX = clamp(x + SIZE / 2 - CHAT_W / 2, d.left, d.right - CHAT_W);
+  const chatY = clamp(y + 110 - CHAT_H, d.top, d.floor - CHAT_H);
   chatWin.setBounds({ x: Math.round(chatX), y: Math.round(chatY), width: CHAT_W, height: CHAT_H });
   chatWin.show();
   chatWin.focus();
@@ -157,17 +230,17 @@ function startWindowWatcher() {
 
 // Turn the raw window list into ledges
 function updatePlatforms(list) {
-  const a = area();
   platforms = list
     .map(([id, left, top, right, bottom]) => {
       const r = screen.screenToDipRect(null, { x: left, y: top, width: right - left, height: bottom - top });
+      const d = displayAt(r.x + r.width / 2, r.y);
       return {
         id,
         left: r.x,
         right: r.x + r.width,
         top: r.y,
         bottom: r.y + r.height,
-        canStand: r.y > a.y + 40 && r.y < a.y + a.height,
+        canStand: d !== null && r.y > d.top + 40 && r.y < d.floor,
       };
     });
 }
@@ -182,20 +255,22 @@ function isVisibleAt(index, x, y) {
 
 function tick() {
   if (!win || dragging) return;
-  const a = area();
-  const ground = groundY();
-  const minX = a.x;
-  const maxX = a.x + a.width - SIZE;
 
   if (falling) {
-    fly(a, ground, minX, maxX);
+    fly();
+    return;
+  }
+  if (lifting) {
+    lift();
     return;
   }
 
   let [x, y] = win.getPosition();
+  const minX = world.left;
+  const maxX = world.right - SIZE;
 
   // standing on a window: check it's still there, and ride along if it moved (currently buggy... might delete later)
-  let floor = ground;
+  let floor = null;
   let ledge = null;
   if (ledgeId !== null) {
     const index = platforms.findIndex((p) => p.id === ledgeId);
@@ -211,6 +286,16 @@ function tick() {
       moveTo(x, y);
     }
     floor = Math.round(ledge.top) - SIZE;
+  }
+
+  // not on a window: the floor is whichever monitor's floor is under her
+  if (!ledge) {
+    const line = groundLine(x + SIZE / 2, y + SIZE);
+    if (line === null) {
+      rescue();
+      return;
+    }
+    floor = line - SIZE;
   }
 
   if (y !== floor) {
@@ -249,6 +334,30 @@ function tick() {
     }
   }
 
+  // crossing into another monitor: look at the floor where she's about to be
+  if (!ledge && !offLeft && !offRight) {
+    const ahead = x + SIZE / 2;
+    const feet = y + SIZE;
+    const below = groundLine(ahead, feet);
+    if (below === null) {
+      const higher = displayAbove(ahead, feet);
+      if (higher && feet - higher.floor <= MAX_LIFT) {
+        startLift(x - direction * GLIDE_SPEED, higher);
+      } else {
+        // empty space ahead (a gap between monitors, or a step too tall): turn around
+        direction *= -1;
+        sendState();
+      }
+      return;
+    }
+    if (below > feet) {
+      // the next monitor's floor is lower: glide off the edge and catch herself on the way down
+      moveTo(x, y);
+      startFalling(x, y, direction * GLIDE_SPEED, 0);
+      return;
+    }
+  }
+
   if ((x <= minX && direction === -1) || (x >= maxX && direction === 1)) {
     x = clamp(x, minX, maxX);
     direction *= -1;
@@ -257,8 +366,49 @@ function tick() {
   moveTo(x, y);
 }
 
+// thrust straight up beside a taller monitor, then hop onto its floor
+function startLift(x, display) {
+  const landX = direction === 1 ? display.left - SIZE / 2 + 1 : display.right - SIZE / 2 - 1;
+  lifting = { x, landX, targetY: display.floor - SIZE };
+  sendState();
+}
+
+function lift() {
+  let [, y] = win.getPosition();
+  const remaining = y - lifting.targetY;
+  y -= Math.min(LIFT_SPEED, remaining * 0.2 + 1);
+  if (y <= lifting.targetY) {
+    moveTo(lifting.landX, lifting.targetY);
+    lifting = null;
+    sendState();
+    return;
+  }
+  moveTo(lifting.x, y);
+}
+
+// she's somewhere with no monitor under her (a monitor was unplugged, or she fell into a gap)
+// bring her back from the top of the primary monitor, and let her catch herself on the way down
+function rescue() {
+  const a = screen.getPrimaryDisplay().workArea;
+  const x = a.x + a.width - SIZE - 50;
+  const y = a.y;
+  lifting = null;
+  moveTo(x, y);
+  startFalling(x, y, 0, 0);
+}
+
+// after the monitors change: if she isn't over any monitor anymore, rescue her
+function checkStranded() {
+  if (!win || dragging) return;
+  const [x, y] = win.getPosition();
+  const centerX = x + SIZE / 2;
+  const nearEdge = centerX >= world.left - SIZE && centerX < world.right + SIZE;
+  if (!nearEdge || groundLine(centerX, y + SIZE) === null) rescue();
+}
+
 function startFalling(x, y, speedX, speedY) {
   braking = false;
+  lifting = null;
   fx = x;
   fy = y;
   vx = speedX;
@@ -269,25 +419,34 @@ function startFalling(x, y, speedX, speedY) {
   sendState();
 }
 
-// one tick of flying: gravity pulls down, edges bounce, the taskbar catches it
-function fly(a, ground, minX, maxX) {
-  const oldFeet = fy + SIZE; 
+// one tick of flying: gravity pulls down, and the floor under her (a window or a monitor) catches her
+function fly() {
+  const oldFeet = fy + SIZE;
   vy += GRAVITY;
   vx *= 0.99;
   fx += vx;
   fy += vy;
 
-  // it can fly off the side of the screen, but at most one window-width out (so walking back doesn't take forever)
-  if (fx < minX - SIZE || fx > maxX + SIZE) {
-    fx = clamp(fx, minX - SIZE, maxX + SIZE);
+  // she can fly off the sides of the desktop, but at most one window-width out (so walking back doesn't take forever)
+  if (fx < world.left - SIZE || fx > world.right) {
+    fx = clamp(fx, world.left - SIZE, world.right);
     vx = 0;
   }
 
   // it can fly off the top of the screen too: gravity always brings it back down
 
+  const centerX = fx + SIZE / 2;
+  const ground = groundLine(centerX, oldFeet);
+
+  // nothing under her at all, and she's fallen past the bottom of every monitor: bring her back
+  if (ground === null && fy > world.bottom + SIZE) {
+    rescue();
+    return;
+  }
+
   // close to the surface below her while coming down: fire the engines and ease into the landing
   if (vy > 0) {
-    const distance = surfaceBelow(fx + SIZE / 2, oldFeet, ground) - (fy + SIZE);
+    const distance = surfaceBelow(centerX, oldFeet, ground) - (fy + SIZE);
     if (distance <= BRAKE_DISTANCE) {
       vy = Math.min(vy, Math.max(BRAKE_MIN_SPEED, distance * BRAKE_EASE));
       vx *= 0.8;
@@ -303,14 +462,13 @@ function fly(a, ground, minX, maxX) {
 
   // passing down through a window's top edge: land on it
   if (vy > 0) {
-    const footX = fx + SIZE / 2;
     const newFeet = fy + SIZE;
     let best = null;
     platforms.forEach((p, index) => {
       if (!p.canStand) return;
-      if (footX < p.left || footX > p.right) return;
+      if (centerX < p.left || centerX > p.right) return;
       if (p.top < oldFeet || p.top > newFeet) return;
-      if (!isVisibleAt(index, footX, p.top)) return;
+      if (!isVisibleAt(index, centerX, p.top)) return;
       if (!best || p.top < best.top) best = p;
     });
     if (best) {
@@ -323,8 +481,9 @@ function fly(a, ground, minX, maxX) {
     }
   }
 
-  if (!landed && fy >= ground) {
-    fy = ground;
+  // reaching the floor of the monitor under her: land
+  if (!landed && ground !== null && fy + SIZE >= ground) {
+    fy = ground - SIZE;
     vx = 0;
     vy = 0;
     landed = true;
@@ -341,9 +500,9 @@ function fly(a, ground, minX, maxX) {
   }
 }
 
-// the closest surface under her feet she could land on: a visible window ledge, or the taskbar
+// the closest surface under her feet she could land on: a visible window ledge, or the floor of the monitor under her
 function surfaceBelow(footX, feet, ground) {
-  let best = ground + SIZE;
+  let best = ground === null ? Infinity : ground;
   platforms.forEach((p, index) => {
     if (!p.canStand || footX < p.left || footX > p.right) return;
     if (p.top < feet || p.top >= best) return;
@@ -355,10 +514,9 @@ function surfaceBelow(footX, feet, ground) {
 
 // Every 4 seconds randomly hover in place, keep gliding, or turn around
 function changeMood() {
-  if (dragging || falling) return;
+  if (dragging || falling || lifting) return;
   const [x] = win.getPosition();
-  const a = area();
-  if (x < a.x || x > a.x + a.width - SIZE) return;
+  if (x < world.left || x > world.right - SIZE) return;
   const roll = Math.random();
   if (roll < 0.4) {
     walking = false;
@@ -373,6 +531,7 @@ function changeMood() {
 ipcMain.on('drag-start', () => {
   dragging = true;
   falling = false;
+  lifting = null;
   const cursor = screen.getCursorScreenPoint();
   dragStartCursor = cursor;
   const [wx, wy] = win.getPosition();
@@ -434,6 +593,20 @@ ipcMain.on('chat-send', async (_event, text) => {
 });
 
 ipcMain.on('chat-close', () => chatWin.hide());
-app.whenReady().then(createWindow);
+// the monitors changed (plugged in, unplugged, rescaled, moved): rebuild the map and make sure she's still on a screen
+function onDisplaysChanged() {
+  logDisplays();
+  buildWorld();
+  checkStranded();
+}
+
+app.whenReady().then(() => {
+  buildWorld();
+  createWindow();
+  logDisplays();
+  screen.on('display-added', onDisplaysChanged);
+  screen.on('display-removed', onDisplaysChanged);
+  screen.on('display-metrics-changed', onDisplaysChanged);
+});
 app.on('window-all-closed', () => app.quit());
 app.on('will-quit', () => { if (watcher) watcher.kill(); });
