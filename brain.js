@@ -5,7 +5,7 @@ const ollama = new Ollama({ host: 'http://localhost:11434' });
 
 const MODEL = 'gpt-oss:120b-cloud';
 
-const PERSONALITY = `You are A.I.D.A. (AI Desktop Assistant), a small, friendly blue triceratops
+const PERSONALITY = `You are A.I.D.A. (AI Desktop Assistant), a small, friendly hovering robot with a screen for a face
 who lives on Andres' desktop. Andres is a computer engineering student at Iowa State.
 Keep replies short: 1 to 3 sentences, casual and a little playful.`;
 

@@ -10,17 +10,20 @@ const TICK_MS = 30;
 const GRAVITY = 1.2;
 const MAX_THROW = 40;
 
-const AIR_TICKS = 14;
-const GROUND_TICKS = 8;
-const HOP_SPEED = 4;
-const HOP_HEIGHT = 24;
+// gliding
+const GLIDE_SPEED = 2;
+
+// catching herself: this close to a surface while falling, her engines fire and slow her down
+const BRAKE_DISTANCE = 40;
+const BRAKE_EASE = 0.3;
+const BRAKE_MIN_SPEED = 1.5;
 
 let win;
 let direction = -1; 
 let walking = false;
 let dragging = false;
 let falling = false;
-let hopTick = 0;
+let braking = false;
 let dragTimer = null;
 let dragOffset = { x: 0, y: 0 };
 let dragSamples = [];
@@ -56,11 +59,7 @@ function moveTo(x, y) {
 }
 
 function sendState() {
-  if (win) win.webContents.send('state', { walking, direction, dragging, falling });
-}
-
-function sendHop(height) {
-  if (win) win.webContents.send('hop', height);
+  if (win) win.webContents.send('state', { walking, direction, dragging, falling, braking, thinking });
 }
 
 function createWindow() {
@@ -121,7 +120,7 @@ function toggleChat() {
   const [x, y] = win.getPosition();
   const a = area();
   const chatX = clamp(x + SIZE / 2 - CHAT_W / 2, a.x, a.x + a.width - CHAT_W);
-  const chatY = clamp(y + 140 - CHAT_H, a.y, a.y + a.height - CHAT_H);
+  const chatY = clamp(y + 110 - CHAT_H, a.y, a.y + a.height - CHAT_H);
   chatWin.setBounds({ x: Math.round(chatX), y: Math.round(chatY), width: CHAT_W, height: CHAT_H });
   chatWin.show();
   chatWin.focus();
@@ -203,8 +202,6 @@ function tick() {
     ledge = platforms[index];
     const footX = x + SIZE / 2;
     if (!ledge || !ledge.canStand || footX < ledge.left || footX > ledge.right || !isVisibleAt(index, footX, ledge.top)) {
-      hopTick = 0;
-      sendHop(0);
       startFalling(x, y, 0, 0);
       return;
     }
@@ -233,44 +230,35 @@ function tick() {
     }
   }
 
-  if (!walking && hopTick === 0) return;
+  if (!walking) return;
 
-  hopTick++;
+  x += direction * GLIDE_SPEED;
 
-  if (hopTick <= AIR_TICKS) {
-    x += direction * HOP_SPEED;
-
-    // on a window: at its edge, usually turn around, sometimes hop off
-    if (ledge) {
-      const footX = x + SIZE / 2;
-      if (footX < ledge.left || footX > ledge.right) {
-        if (Math.random() < 0.7) {
-          x -= direction * HOP_SPEED;
-          direction *= -1;
-          sendState();
-        } else {
-          hopTick = 0;
-          sendHop(0);
-          startFalling(x, y, direction * HOP_SPEED, -6); 
-          return;
-        }
+  // on a window: at its edge, usually turn around, sometimes glide off
+  if (ledge) {
+    const footX = x + SIZE / 2;
+    if (footX < ledge.left || footX > ledge.right) {
+      if (Math.random() < 0.7) {
+        x -= direction * GLIDE_SPEED;
+        direction *= -1;
+        sendState();
+      } else {
+        startFalling(x, y, direction * GLIDE_SPEED, -4);
+        return;
       }
     }
-
-    if ((x <= minX && direction === -1) || (x >= maxX && direction === 1)) {
-      x = clamp(x, minX, maxX);
-      direction *= -1;   
-      sendState();
-    }
-    moveTo(x, y);
-    sendHop(-Math.sin(Math.PI * hopTick / AIR_TICKS) * HOP_HEIGHT);
-  } else {
-    sendHop(0);
-    if (hopTick >= AIR_TICKS + GROUND_TICKS) hopTick = 0;
   }
+
+  if ((x <= minX && direction === -1) || (x >= maxX && direction === 1)) {
+    x = clamp(x, minX, maxX);
+    direction *= -1;
+    sendState();
+  }
+  moveTo(x, y);
 }
 
 function startFalling(x, y, speedX, speedY) {
+  braking = false;
   fx = x;
   fy = y;
   vx = speedX;
@@ -296,6 +284,20 @@ function fly(a, ground, minX, maxX) {
   }
 
   // it can fly off the top of the screen too: gravity always brings it back down
+
+  // close to the surface below her while coming down: fire the engines and ease into the landing
+  if (vy > 0) {
+    const distance = surfaceBelow(fx + SIZE / 2, oldFeet, ground) - (fy + SIZE);
+    if (distance <= BRAKE_DISTANCE) {
+      vy = Math.min(vy, Math.max(BRAKE_MIN_SPEED, distance * BRAKE_EASE));
+      vx *= 0.8;
+      fy = oldFeet - SIZE + vy;
+      if (!braking) {
+        braking = true;
+        sendState();
+      }
+    }
+  }
 
   let landed = false;
 
@@ -334,11 +336,24 @@ function fly(a, ground, minX, maxX) {
   if (landed || newDirection !== direction) {
     direction = newDirection;
     falling = !landed;
+    if (landed) braking = false;
     sendState();
   }
 }
 
-// Every 4 seconds randomly stand still, keep hopping, or turn around
+// the closest surface under her feet she could land on: a visible window ledge, or the taskbar
+function surfaceBelow(footX, feet, ground) {
+  let best = ground + SIZE;
+  platforms.forEach((p, index) => {
+    if (!p.canStand || footX < p.left || footX > p.right) return;
+    if (p.top < feet || p.top >= best) return;
+    if (!isVisibleAt(index, footX, p.top)) return;
+    best = p.top;
+  });
+  return best;
+}
+
+// Every 4 seconds randomly hover in place, keep gliding, or turn around
 function changeMood() {
   if (dragging || falling) return;
   const [x] = win.getPosition();
@@ -358,8 +373,6 @@ function changeMood() {
 ipcMain.on('drag-start', () => {
   dragging = true;
   falling = false;
-  hopTick = 0;
-  sendHop(0);
   const cursor = screen.getCursorScreenPoint();
   dragStartCursor = cursor;
   const [wx, wy] = win.getPosition();
@@ -402,6 +415,7 @@ ipcMain.on('drag-end', () => {
 ipcMain.on('chat-send', async (_event, text) => {
   if (thinking) return;
   thinking = true;
+  sendState();
   history.push({ role: 'user', content: text });
   chatWin.webContents.send('chat-start');
 
@@ -416,6 +430,7 @@ ipcMain.on('chat-send', async (_event, text) => {
 
   chatWin.webContents.send('chat-done');
   thinking = false;
+  sendState();
 });
 
 ipcMain.on('chat-close', () => chatWin.hide());
