@@ -12,6 +12,8 @@
     "electron": "^45.0.0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
+    "dotenv": "^18.0.10",
     "ollama": "^0.6.4"
   }
 }
