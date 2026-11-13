@@ -1,4 +1,4 @@
-const { ask } = require('./brain');
+const { ask } = require('../brain');
 
 const history = [{ role: 'user', content: 'Hi! Who are you?' }];
 

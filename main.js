@@ -1,7 +1,7 @@
 const { app, BrowserWindow, screen, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
-const { ask } = require('./brain');
+const { chat } = require('./brain');
 
 const SIZE = 200;
 const TICK_MS = 30;
@@ -43,10 +43,7 @@ const CHAT_H = 300;
 let chatWin = null;
 let dragStartCursor = { x: 0, y: 0 }; 
 
-// conversation memory
-let history = [];
 let thinking = false;
-const MAX_HISTORY = 20;
 
 // window ledges
 let platforms = [];
@@ -575,16 +572,12 @@ ipcMain.on('chat-send', async (_event, text) => {
   if (thinking) return;
   thinking = true;
   sendState();
-  history.push({ role: 'user', content: text });
   chatWin.webContents.send('chat-start');
 
   try {
-    const reply = await ask(history, (piece) => chatWin.webContents.send('chat-piece', piece));
-    history.push({ role: 'assistant', content: reply });
-    if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+    await chat(text, (piece) => chatWin.webContents.send('chat-piece', piece));
   } catch (err) {
     chatWin.webContents.send('chat-piece', `(my brain isn't answering: ${err.message})`);
-    history.pop();
   }
 
   chatWin.webContents.send('chat-done');
