@@ -21,6 +21,12 @@ const EYE_COLORS = ['rgb(66, 140, 28)', 'rgb(66, 140, 28)', 'rgb(53, 115, 20)', 
 const LOOKS = [-2, 0, 0, 2, 4];
 const SCREEN_COLOR = 'rgb(27, 27, 27)';
 
+// following the mouse
+const LOOK_MIN_X = -3;
+const LOOK_MAX_X = 5;
+const FOLLOW_RANGE = 700;
+const FOLLOW_TIMEOUT = 180;
+
 // antenna: a rigid rod in column 25, from the tip (row 0) down to its hinge right above the black part (row 14)
 const ANTENNA_X = 25;
 const ANTENNA_PIVOT = 14;
@@ -53,6 +59,17 @@ let frame = 0;
 
 window.aida.onState((s) => { state = s; });
 window.aida.onEmote((name) => playEmote(name));
+
+// Location of the mouse
+let cursor = { dx: 0, dy: 0 };
+let cursorMovedAt = -1000;
+let lookY = 0;
+
+window.aida.onCursor((c) => {
+  if (Math.abs(c.dx - cursor.dx) > 2 || Math.abs(c.dy - cursor.dy) > 2) cursorMovedAt = frame;
+  cursor = c;
+});
+
 
 // grab and drop
 canvas.addEventListener('mousedown', (e) => {
@@ -136,11 +153,23 @@ function updateHabits() {
     blinkStart = frame;
     nextBlink = frame + rand(180, 420);
   }
-  if (frame >= nextLook) {
-    lookTarget = LOOKS[rand(0, LOOKS.length)];
-    nextLook = frame + rand(150, 420);
+    const followingMouse =
+    frame - cursorMovedAt < FOLLOW_TIMEOUT && Math.hypot(cursor.dx, cursor.dy) < FOLLOW_RANGE;
+
+  if (followingMouse) {
+    // she's drawn facing left; when she faces right the drawing is mirrored, so flip the direction
+    const towardMouse = state.direction === 1 ? -cursor.dx : cursor.dx;
+    lookTarget = Math.max(LOOK_MIN_X, Math.min(LOOK_MAX_X, Math.round(towardMouse / 60)));
+    lookY = Math.max(-1, Math.min(1, Math.round(cursor.dy / 150)));
+  } else {
+    lookY = 0;
+    if (frame >= nextLook) {
+      lookTarget = LOOKS[rand(0, LOOKS.length)];
+      nextLook = frame + rand(150, 420);
+    }
   }
   if (frame % 4 === 0 && look !== lookTarget) look += Math.sign(lookTarget - look);
+  
   if (frame >= nextAntennaBlink) {
     antennaOffStart = frame;
     nextAntennaBlink = frame + rand(1200, 2400);
@@ -190,6 +219,7 @@ function drawBody() {
       for (let row = 4 - h; row < 4; row++) {
         bctx.fillStyle = EYE_COLORS[row];
         bctx.fillRect(eyeX + look, EYE_TOP + row, 1, 1);
+        bctx.fillRect(eyeX + look, EYE_TOP + lookY + row, 1, 1);
       }
     }
   }

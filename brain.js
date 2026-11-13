@@ -4,9 +4,13 @@ require('dotenv').config({ path: path.resolve(__dirname, '.env'), quiet: true })
 const { Anthropic } = require('@anthropic-ai/sdk');
 const { Ollama } = require('ollama');
 const memory = require('./memory');
-const memoryTools = require('./tools/memory');
 const conversation = require('./conversation');
+const expression = require('./expression');
+
+// tools:
+const memoryTools = require('./tools/memory');
 const gmailTools = require('./tools/gmail');
+
 
 const BRAIN = 'claude'; // Choose whether to use claude or ollama
 
@@ -35,6 +39,7 @@ function now() {
 function systemBlocks() {
   return [
     { type: 'text', text: PERSONALITY },
+    { type: 'text', text: expression.asPrompt() },
     { type: 'text', text: memory.asPrompt(), cache_control: { type: 'ephemeral' } },
     { type: 'text', text: `Right now it is ${now()}.` },
   ];
@@ -52,9 +57,13 @@ async function runTool(name, input) {
 }
 
 // Claude call, with tools
-async function askClaude(history, onPiece) {
+async function askClaude(history, onPiece, onAction) {
   const messages = [...history];
   let reply = '';
+  const push = expression.createTagReader((piece) => {
+    reply += piece;
+    if (onPiece) onPiece(piece);
+  }, onAction);
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const stream = claude.messages.stream({
@@ -64,10 +73,7 @@ async function askClaude(history, onPiece) {
       tools,
       messages,
     });
-    stream.on('text', (piece) => {
-      reply += piece;
-      if (onPiece) onPiece(piece);
-    });
+    stream.on('text', push);
     const message = await stream.finalMessage();
 
     if (message.stop_reason !== 'tool_use') return reply;
@@ -85,38 +91,38 @@ async function askClaude(history, onPiece) {
 }
 
 // Ollama call (but has no tools to change it)
-async function askOllama(history, onPiece) {
-  const system = `${PERSONALITY}\n\n${memory.asPrompt()}\n\nRight now it is ${now()}.`;
+async function askOllama(history, onPiece, onAction) {
+  const system = `${PERSONALITY}\n\n${expression.asPrompt()}\n\n${memory.asPrompt()}\n\nRight now it is ${now()}.`;
+  let reply = '';
+  const push = expression.createTagReader((piece) => {
+    reply += piece;
+    if (onPiece) onPiece(piece);
+  }, onAction);
+
   const stream = await ollama.chat({
     model: OLLAMA_MODEL,
     messages: [{ role: 'system', content: system }, ...history],
     stream: true,
   });
-
-  let reply = '';
-  for await (const part of stream) {
-    const piece = part.message.content;
-    reply += piece;
-    if (onPiece) onPiece(piece);
-  }
+  for await (const part of stream) push(part.message.content);
   return reply;
 }
 
 // Backup brain if Claude fails
-async function ask(history, onPiece) {
-  if (BRAIN === 'ollama') return askOllama(history, onPiece);
+async function ask(history, onPiece, onAction) {
+  if (BRAIN === 'ollama') return askOllama(history, onPiece, onAction);
   try {
-    return await askClaude(history, onPiece);
+    return await askClaude(history, onPiece, onAction);
   } catch (err) {
     console.error('Claude failed, switching to Ollama:', err.message);
     if (onPiece) onPiece(`(my main brain isn't answering: ${err.message}. Using my backup brain.)\n`);
-    return askOllama(history, onPiece);
+    return askOllama(history, onPiece, onAction);
   }
 }
 
-async function chat(text, onPiece) {
+async function chat(text, onPiece, onAction) {
   const history = [...conversation.recent(), { role: 'user', content: text }];
-  const reply = await ask(history, onPiece);
+  const reply = await ask(history, onPiece, onAction);
   if (reply.trim()) conversation.addExchange(text, reply);
   return reply;
 }

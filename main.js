@@ -120,6 +120,14 @@ function sendState() {
   if (win) win.webContents.send('state', { walking, direction, dragging, falling, braking: braking || lifting !== null, thinking });
 }
 
+// discover where the mouse is
+function sendCursor() {
+  if(!win || dragging) return;
+  const c = screen.getCursorScreenPoint();
+  const [x, y] = win.getPosition();
+  win.webContents.send('cursor', { dx: c.x - (x + SIZE / 2), dy: c.y - (y + SIZE / 2) });
+}
+
 function createWindow() {
   const a = screen.getPrimaryDisplay().workArea;
   win = new BrowserWindow({
@@ -144,6 +152,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', sendState);
 
   setInterval(tick, TICK_MS);
+  setInterval(sendCursor, 100);
   setInterval(changeMood, 4000);
   startWindowWatcher();
   createChatWindow();
@@ -575,8 +584,13 @@ ipcMain.on('chat-send', async (_event, text) => {
   chatWin.webContents.send('chat-start');
 
   try {
-    await chat(text, (piece) => chatWin.webContents.send('chat-piece', piece));
-  } catch (err) {
+    await chat(
+      text,
+      (piece) => chatWin.webContents.send('chat-piece', piece),
+      (action) => {
+        if (action.type === 'emote') win.webContents.send('emote', action.name);
+      },
+    );  } catch (err) {
     chatWin.webContents.send('chat-piece', `(my brain isn't answering: ${err.message})`);
   }
 

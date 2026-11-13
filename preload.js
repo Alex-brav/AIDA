@@ -5,4 +5,5 @@ contextBridge.exposeInMainWorld('aida', {
   dragEnd: () => ipcRenderer.send('drag-end'),
   onState: (callback) => ipcRenderer.on('state', (_event, state) => callback(state)),
   onEmote: (callback) => ipcRenderer.on('emote', (_event, name) => callback(name)),
+  onCursor: (callback) => ipcRenderer.on('cursor', (_event, offset) => callback(offset)),
 });
